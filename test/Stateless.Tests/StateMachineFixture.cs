@@ -304,6 +304,113 @@ namespace Stateless.Tests
         }
 
         [Fact]
+        public void ParametersSuppliedToFireArePassedToMultipleEntryAction()
+        {
+            var sm = new StateMachine<State, Trigger>(State.B);
+
+            var x = sm.SetTriggerParameters<string, int>(Trigger.X);
+
+            sm.Configure(State.B)
+                .Permit(Trigger.X, State.C);
+
+            string entryArgS1 = null;
+            int entryArgI1 = 0;
+            string entryArgS2 = null;
+            int entryArgI2 = 0;
+
+            sm.Configure(State.C)
+                .OnEntryFrom(x, (s, i) =>
+                {
+                    entryArgS1 = s;
+                    entryArgI1 = i;
+                }).OnEntryFrom(x, (s, i) =>
+                {
+                    entryArgS2 = s;
+                    entryArgI2 = i;
+                });
+
+            var suppliedArgS = "something";
+            var suppliedArgI = 42;
+
+            sm.Fire(x, suppliedArgS, suppliedArgI);
+
+            Assert.Equal(suppliedArgS, entryArgS1);
+            Assert.Equal(suppliedArgI, entryArgI1);
+            Assert.Equal(suppliedArgS, entryArgS2);
+            Assert.Equal(suppliedArgI, entryArgI2);
+        }
+
+        [Fact]
+        public void ParametersSuppliedToFireArePassedToSupportedEntryActionTwoArg()
+        {
+            var sm = new StateMachine<State, Trigger>(State.B);
+
+            var x = sm.SetTriggerParameters<string, int>(Trigger.X);
+            var y = sm.SetTriggerParameters<string>(Trigger.X);
+
+            sm.Configure(State.B)
+                .Permit(Trigger.X, State.C);
+
+            string entryArgS1 = null;
+            int entryArgI = 0;
+            string entryArgS2 = null;
+
+            sm.Configure(State.C)
+                .OnEntryFrom(x, (s, i) =>
+                {
+                    entryArgS1 = s;
+                    entryArgI = i;
+                }).OnEntryFrom(y, s =>
+                {
+                    entryArgS2 = s;
+                });
+
+            var suppliedArgS = "something";
+            var suppliedArgI = 42;
+
+            sm.Fire(x, suppliedArgS, suppliedArgI);
+
+            Assert.Equal(suppliedArgS, entryArgS1);
+            Assert.Equal(suppliedArgI, entryArgI);
+            Assert.Null(entryArgS2);
+        }
+
+        [Fact]
+        public void ParametersSuppliedToFireArePassedToSupportedEntryActionOneArg()
+        {
+            var sm = new StateMachine<State, Trigger>(State.B);
+
+            var x = sm.SetTriggerParameters<string, int>(Trigger.X);
+            var y = sm.SetTriggerParameters<string>(Trigger.X);
+
+            sm.Configure(State.B)
+                .Permit(Trigger.X, State.C);
+
+            string entryArgS1 = null;
+            int entryArgI = 0;
+            string entryArgS2 = null;
+
+            sm.Configure(State.C)
+                .OnEntryFrom(x, (s, i) =>
+                {
+                    entryArgS1 = s;
+                    entryArgI = i;
+                }).OnEntryFrom(y, s =>
+                {
+                    entryArgS2 = s;
+                });
+
+            var suppliedArgS = "something";
+            var suppliedArgI = 42;
+
+            sm.Fire(y, suppliedArgS);
+
+            Assert.Null(entryArgS1);
+            Assert.Equal(suppliedArgI, 0);
+            Assert.Equal(suppliedArgS, entryArgS2);
+        }
+
+        [Fact]
         public void WhenAnUnhandledTriggerIsFired_TheProvidedHandlerIsCalledWithStateAndTrigger()
         {
             var sm = new StateMachine<State, Trigger>(State.B);
