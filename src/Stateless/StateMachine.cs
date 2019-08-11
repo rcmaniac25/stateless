@@ -24,7 +24,7 @@ namespace Stateless
     public partial class StateMachine<TState, TTrigger>
     {
         private readonly IDictionary<TState, StateRepresentation> _stateConfiguration = new Dictionary<TState, StateRepresentation>();
-        private readonly IDictionary<TTrigger, TriggerWithParameters> _triggerConfiguration = new Dictionary<TTrigger, TriggerWithParameters>();
+        private readonly IDictionary<TriggerWithParameters.TriggerWithParametersTypeKey, TriggerWithParameters> _triggerConfiguration = new Dictionary<TriggerWithParameters.TriggerWithParametersTypeKey, TriggerWithParameters>();
         private readonly Func<TState> _stateAccessor;
         private readonly Action<TState> _stateMutator;
         private UnhandledTriggerAction _unhandledTriggerAction;
@@ -33,7 +33,7 @@ namespace Stateless
 
         private class QueuedTrigger
         {
-            public TTrigger Trigger { get; set; }
+            public TriggerWithParameters.TriggerWithParametersTypeKey TriggerKey { get; set; }
             public object[] Args { get; set; }
         }
 
@@ -197,7 +197,7 @@ namespace Stateless
         /// not allow the trigger to be fired.</exception>
         public void Fire(TTrigger trigger)
         {
-            InternalFire(trigger, new object[0]);
+            InternalFire(new TriggerWithParameters.TriggerWithParametersTypeKey(trigger, new Type[0]), new object[0]);
         }
 
         /// <summary>
@@ -214,7 +214,7 @@ namespace Stateless
         public void Fire<TArg0>(TriggerWithParameters<TArg0> trigger, TArg0 arg0)
         {
             if (trigger == null) throw new ArgumentNullException(nameof(trigger));
-            InternalFire(trigger.Trigger, arg0);
+            InternalFire(trigger.InternalKey, arg0);
         }
 
         /// <summary>
@@ -233,7 +233,7 @@ namespace Stateless
         public void Fire<TArg0, TArg1>(TriggerWithParameters<TArg0, TArg1> trigger, TArg0 arg0, TArg1 arg1)
         {
             if (trigger == null) throw new ArgumentNullException(nameof(trigger));
-            InternalFire(trigger.Trigger, arg0, arg1);
+            InternalFire(trigger.InternalKey, arg0, arg1);
         }
 
         /// <summary>
@@ -254,7 +254,7 @@ namespace Stateless
         public void Fire<TArg0, TArg1, TArg2>(TriggerWithParameters<TArg0, TArg1, TArg2> trigger, TArg0 arg0, TArg1 arg1, TArg2 arg2)
         {
             if (trigger == null) throw new ArgumentNullException(nameof(trigger));
-            InternalFire(trigger.Trigger, arg0, arg1, arg2);
+            InternalFire(trigger.InternalKey, arg0, arg1, arg2);
         }
 
         /// <summary>
@@ -282,17 +282,17 @@ namespace Stateless
         /// <summary>
         /// Determine how to Fire the trigger
         /// </summary>
-        /// <param name="trigger">The trigger. </param>
+        /// <param name="triggerKey">The trigger. </param>
         /// <param name="args">A variable-length parameters list containing arguments. </param>
-        void InternalFire(TTrigger trigger, params object[] args)
+        void InternalFire(TriggerWithParameters.TriggerWithParametersTypeKey triggerKey, params object[] args)
         {
             switch (_firingMode)
             {
                 case FiringMode.Immediate:
-                    InternalFireOne(trigger, args);
+                    InternalFireOne(triggerKey, args);
                     break;
                 case FiringMode.Queued:
-                    InternalFireQueued(trigger, args);
+                    InternalFireQueued(triggerKey, args);
                     break;
                 default:
                     // If something is completely messed up we let the user know ;-)
@@ -304,14 +304,14 @@ namespace Stateless
         /// Queue events and then fire in order.
         /// If only one event is queued, this behaves identically to the non-queued version.
         /// </summary>
-        /// <param name="trigger">  The trigger. </param>
+        /// <param name="triggerKey">  The trigger. </param>
         /// <param name="args">     A variable-length parameters list containing arguments. </param>
-        private void InternalFireQueued(TTrigger trigger, params object[] args)
+        private void InternalFireQueued(TriggerWithParameters.TriggerWithParametersTypeKey triggerKey, params object[] args)
         {
             // If a trigger is already being handled then the trigger will be queued (FIFO) and processed later.
             if (_firing)
             {
-                _eventQueue.Enqueue(new QueuedTrigger { Trigger = trigger, Args = args });
+                _eventQueue.Enqueue(new QueuedTrigger { TriggerKey = triggerKey, Args = args });
                 return;
             }
 
@@ -319,13 +319,13 @@ namespace Stateless
             {
                 _firing = true;
 
-                InternalFireOne(trigger, args);
+                InternalFireOne(triggerKey, args);
                 
                 // Check if any other triggers have been queued, and fire those as well.
                 while (_eventQueue.Count != 0)
                 {
                     var queuedEvent = _eventQueue.Dequeue();
-                    InternalFireOne(queuedEvent.Trigger, queuedEvent.Args);
+                    InternalFireOne(queuedEvent.TriggerKey, queuedEvent.Args);
                 }
             }
             finally
@@ -338,21 +338,21 @@ namespace Stateless
         /// This method handles the execution of a trigger handler. It finds a
         /// handle, then updates the current state information.
         /// </summary>
-        /// <param name="trigger"></param>
+        /// <param name="triggerKey"></param>
         /// <param name="args"></param>
-        void InternalFireOne(TTrigger trigger, params object[] args)
+        void InternalFireOne(TriggerWithParameters.TriggerWithParametersTypeKey triggerKey, params object[] args)
         {
             // If this is a trigger with parameters, we must validate the parameter(s)
-            if (_triggerConfiguration.TryGetValue(trigger, out TriggerWithParameters configuration))
+            if (_triggerConfiguration.TryGetValue(triggerKey, out TriggerWithParameters configuration))
                 configuration.ValidateParameters(args);
 
             var source = State;
             var representativeState = GetRepresentation(source);
 
             // Try to find a trigger handler, either in the current state or a super state.
-            if (!representativeState.TryFindHandler(trigger, args, out TriggerBehaviourResult result))
+            if (!representativeState.TryFindHandler(triggerKey.Trigger, args, out TriggerBehaviourResult result))
             {
-                _unhandledTriggerAction.Execute(representativeState.UnderlyingState, trigger, result?.UnmetGuardConditions);
+                _unhandledTriggerAction.Execute(representativeState.UnderlyingState, triggerKey.Trigger, result?.UnmetGuardConditions);
                 return;
             }
 
@@ -366,14 +366,14 @@ namespace Stateless
                 case ReentryTriggerBehaviour handler:
                     {
                         // Handle transition, and set new state
-                        var transition = new Transition(source, handler.Destination, trigger);
+                        var transition = new Transition(source, handler.Destination, triggerKey.Trigger);
                         HandleReentryTrigger(args, representativeState, transition);
                         break;
                     }
                 case DynamicTriggerBehaviour _ when (result.Handler.ResultsInTransitionFrom(source, args, out TState destination)):
                 {
                     // Handle transition, and set new state
-                    var transition = new Transition(source, destination, trigger);
+                    var transition = new Transition(source, destination, triggerKey.Trigger);
 
                     HandleTransitioningTrigger(args, representativeState, transition);
 
@@ -382,7 +382,7 @@ namespace Stateless
                 case TransitioningTriggerBehaviour _ when (result.Handler.ResultsInTransitionFrom(source, args, out TState destination)):
                     {
                         // Handle transition, and set new state
-                        var transition = new Transition(source, destination, trigger);
+                        var transition = new Transition(source, destination, triggerKey.Trigger);
 
                         HandleTransitioningTrigger(args, representativeState, transition);
 
@@ -391,7 +391,7 @@ namespace Stateless
                 case InternalTriggerBehaviour _:
                 {
                     // Internal transitions does not update the current state, but must execute the associated action.
-                    var transition = new Transition(source, source, trigger);
+                    var transition = new Transition(source, source, triggerKey.Trigger);
                     CurrentRepresentation.InternalAction(transition, args);
                     break;
                 }
@@ -556,11 +556,11 @@ namespace Stateless
 
         void SaveTriggerConfiguration(TriggerWithParameters trigger)
         {
-            if (_triggerConfiguration.ContainsKey(trigger.Trigger))
+            if (_triggerConfiguration.ContainsKey(trigger.InternalKey))
                 throw new InvalidOperationException(
                     string.Format(StateMachineResources.CannotReconfigureParameters, trigger));
 
-            _triggerConfiguration.Add(trigger.Trigger, trigger);
+            _triggerConfiguration.Add(trigger.InternalKey, trigger);
         }
 
         void DefaultUnhandledTriggerAction(TState state, TTrigger trigger, ICollection<string> unmetGuardConditions)

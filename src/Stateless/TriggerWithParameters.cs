@@ -9,8 +9,7 @@ namespace Stateless
         /// </summary>
         public abstract class TriggerWithParameters
         {
-            readonly TTrigger _underlyingTrigger;
-            readonly Type[] _argumentTypes;
+            readonly TriggerWithParametersTypeKey _key;
 
             /// <summary>
             /// Create a configured trigger.
@@ -19,14 +18,18 @@ namespace Stateless
             /// <param name="argumentTypes">The argument types expected by the trigger.</param>
             public TriggerWithParameters(TTrigger underlyingTrigger, params Type[] argumentTypes)
             {
-                _underlyingTrigger = underlyingTrigger;
-                _argumentTypes = argumentTypes ?? throw new ArgumentNullException(nameof(argumentTypes));
+                _key = new TriggerWithParametersTypeKey(underlyingTrigger, argumentTypes);
             }
 
             /// <summary>
             /// Gets the underlying trigger value that has been configured.
             /// </summary>
-            public TTrigger Trigger { get { return _underlyingTrigger; } }
+            public TTrigger Trigger { get { return _key.Trigger; } }
+
+            /// <summary>
+            /// Get the underlying key type that represents the trigger.
+            /// </summary>
+            internal TriggerWithParametersTypeKey InternalKey { get { return _key; } }
 
             /// <summary>
             /// Ensure that the supplied arguments are compatible with those configured for this
@@ -37,7 +40,35 @@ namespace Stateless
             {
                 if (args == null) throw new ArgumentNullException(nameof(args));
 
-                ParameterConversion.Validate(args, _argumentTypes);
+                ParameterConversion.Validate(args, _key._argumentTypes);
+            }
+
+            internal struct TriggerWithParametersTypeKey
+            {
+                public readonly Type[] _argumentTypes;
+
+                public TriggerWithParametersTypeKey(TTrigger underlyingTrigger, Type[] argumentTypes)
+                {
+                    Trigger = underlyingTrigger;
+                    _argumentTypes = argumentTypes ?? throw new ArgumentNullException(nameof(argumentTypes));
+                }
+
+                public TTrigger Trigger { get; private set; }
+
+                public override bool Equals(object obj)
+                {
+                    if (obj is TriggerWithParametersTypeKey otherKey)
+                    {
+                        return otherKey.Trigger.Equals(this.Trigger) && this._argumentTypes.Equals(otherKey._argumentTypes);
+                    }
+                    return false;
+                }
+
+                public override int GetHashCode()
+                {
+                    //TODO: getting the hash code of an array is troublesome
+                    return Tuple.Create(Trigger, _argumentTypes).GetHashCode();
+                }
             }
         }
 

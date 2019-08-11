@@ -42,7 +42,7 @@ namespace Stateless
         /// not allow the trigger to be fired.</exception>
         public Task FireAsync(TTrigger trigger)
         {
-            return InternalFireAsync(trigger, new object[0]);
+            return InternalFireAsync(new TriggerWithParameters.TriggerWithParametersTypeKey(trigger, new Type[0]), new object[0]);
         }
 
         /// <summary>
@@ -60,7 +60,7 @@ namespace Stateless
         {
             if (trigger == null) throw new ArgumentNullException(nameof(trigger));
 
-            return InternalFireAsync(trigger.Trigger, arg0);
+            return InternalFireAsync(trigger.InternalKey, arg0);
         }
 
         /// <summary>
@@ -80,7 +80,7 @@ namespace Stateless
         {
             if (trigger == null) throw new ArgumentNullException(nameof(trigger));
 
-            return InternalFireAsync(trigger.Trigger, arg0, arg1);
+            return InternalFireAsync(trigger.InternalKey, arg0, arg1);
         }
 
         /// <summary>
@@ -102,23 +102,23 @@ namespace Stateless
         {
             if (trigger == null) throw new ArgumentNullException(nameof(trigger));
 
-            return InternalFireAsync(trigger.Trigger, arg0, arg1, arg2);
+            return InternalFireAsync(trigger.InternalKey, arg0, arg1, arg2);
         }
 
         /// <summary>
         /// Determine how to Fire the trigger
         /// </summary>
-        /// <param name="trigger">The trigger. </param>
+        /// <param name="triggerKey">The trigger. </param>
         /// <param name="args">A variable-length parameters list containing arguments. </param>
-        async Task InternalFireAsync(TTrigger trigger, params object[] args)
+        async Task InternalFireAsync(TriggerWithParameters.TriggerWithParametersTypeKey triggerKey, params object[] args)
         {
             switch (_firingMode)
             {
                 case FiringMode.Immediate:
-                    await InternalFireOneAsync(trigger, args);
+                    await InternalFireOneAsync(triggerKey, args);
                     break;
                 case FiringMode.Queued:
-                    await InternalFireQueuedAsync(trigger, args);
+                    await InternalFireQueuedAsync(triggerKey, args);
                     break;
                 default:
                     // If something is completely messed up we let the user know ;-)
@@ -130,13 +130,13 @@ namespace Stateless
         /// Queue events and then fire in order.
         /// If only one event is queued, this behaves identically to the non-queued version.
         /// </summary>
-        /// <param name="trigger">  The trigger. </param>
+        /// <param name="triggerKey">  The trigger. </param>
         /// <param name="args">     A variable-length parameters list containing arguments. </param>
-        async Task InternalFireQueuedAsync(TTrigger trigger, params object[] args)
+        async Task InternalFireQueuedAsync(TriggerWithParameters.TriggerWithParametersTypeKey triggerKey, params object[] args)
         {
             if (_firing)
             {
-                _eventQueue.Enqueue(new QueuedTrigger { Trigger = trigger, Args = args });
+                _eventQueue.Enqueue(new QueuedTrigger { TriggerKey = triggerKey, Args = args });
                 return;
             }
 
@@ -144,12 +144,12 @@ namespace Stateless
             {
                 _firing = true;
 
-                await InternalFireOneAsync(trigger, args).ConfigureAwait(false);
+                await InternalFireOneAsync(triggerKey, args).ConfigureAwait(false);
 
                 while (_eventQueue.Count != 0)
                 {
                     var queuedEvent = _eventQueue.Dequeue();
-                    await InternalFireOneAsync(queuedEvent.Trigger, queuedEvent.Args).ConfigureAwait(false);
+                    await InternalFireOneAsync(queuedEvent.TriggerKey, queuedEvent.Args).ConfigureAwait(false);
                 }
             }
             finally
@@ -157,19 +157,19 @@ namespace Stateless
                 _firing = false;
             }
         }
-        async Task InternalFireOneAsync(TTrigger trigger, params object[] args)
+        async Task InternalFireOneAsync(TriggerWithParameters.TriggerWithParametersTypeKey triggerKey, params object[] args)
         {
             // If this is a trigger with parameters, we must validate the parameter(s)
-            if (_triggerConfiguration.TryGetValue(trigger, out var configuration))
+            if (_triggerConfiguration.TryGetValue(triggerKey, out var configuration))
                 configuration.ValidateParameters(args);
 
             var source = State;
             var representativeState = GetRepresentation(source);
 
             // Try to find a trigger handler, either in the current state or a super state.
-            if (!representativeState.TryFindHandler(trigger, args, out var result))
+            if (!representativeState.TryFindHandler(triggerKey.Trigger, args, out var result))
             {
-                await _unhandledTriggerAction.ExecuteAsync(representativeState.UnderlyingState, trigger, result?.UnmetGuardConditions).ConfigureAwait(false);
+                await _unhandledTriggerAction.ExecuteAsync(representativeState.UnderlyingState, triggerKey.Trigger, result?.UnmetGuardConditions).ConfigureAwait(false);
                 return;
             }
             // Check if this trigger should be ignored
@@ -182,7 +182,7 @@ namespace Stateless
             if (result.Handler is ReentryTriggerBehaviour handler)
             {
                 // Handle transition, and set new state
-                var transition = new Transition(source, handler.Destination, trigger);
+                var transition = new Transition(source, handler.Destination, triggerKey.Trigger);
                 transition = await representativeState.ExitAsync(transition);
                 State = transition.Destination;
                 var newRepresentation = GetRepresentation(transition.Destination);
@@ -190,18 +190,18 @@ namespace Stateless
                 if (!source.Equals(transition.Destination))
                 {
                     // Then Exit the final superstate
-                    transition = new Transition(handler.Destination, handler.Destination, trigger);
+                    transition = new Transition(handler.Destination, handler.Destination, triggerKey.Trigger);
                     await newRepresentation.ExitAsync(transition);
                 }
 
-                await _onTransitionedEvent.InvokeAsync(new Transition(source, handler.Destination, trigger));
+                await _onTransitionedEvent.InvokeAsync(new Transition(source, handler.Destination, triggerKey.Trigger));
 
                 await newRepresentation.EnterAsync(transition, args);
             }
             // Check if it is an internal transition, or a transition from one state to another.
             else if (result.Handler.ResultsInTransitionFrom(source, args, out var destination))
             {
-                var transition = new Transition(source, destination, trigger);
+                var transition = new Transition(source, destination, triggerKey.Trigger);
 
                 transition = await representativeState.ExitAsync(transition).ConfigureAwait(false);
 
@@ -220,25 +220,25 @@ namespace Stateless
                     // Check if state has substate(s), and if an initial transition(s) has been set up.
                     while (newRepresentation.GetSubstates().Any() && newRepresentation.HasInitialTransition)
                     {
-                        var initialTransition = new Transition(source, newRepresentation.InitialTransitionTarget, trigger);
+                        var initialTransition = new Transition(source, newRepresentation.InitialTransitionTarget, triggerKey.Trigger);
                         newRepresentation = GetRepresentation(newRepresentation.InitialTransitionTarget);
                         await newRepresentation.EnterAsync(initialTransition, args);
                         State = newRepresentation.UnderlyingState;
                     }
                     //Alert all listeners of state transition
-                    await _onTransitionedEvent.InvokeAsync(new Transition(source, destination, trigger));
+                    await _onTransitionedEvent.InvokeAsync(new Transition(source, destination, triggerKey.Trigger));
                 }
                 else
                 {
                     //Alert all listeners of state transition
-                    await _onTransitionedEvent.InvokeAsync(new Transition(source, destination, trigger));
+                    await _onTransitionedEvent.InvokeAsync(new Transition(source, destination, triggerKey.Trigger));
 
                     await newRepresentation.EnterAsync(transition, args);
                 }
             }
             else
             {
-                var transition = new Transition(source, destination, trigger);
+                var transition = new Transition(source, destination, triggerKey.Trigger);
 
                 await CurrentRepresentation.InternalActionAsync(transition, args).ConfigureAwait(false);
             }

@@ -234,11 +234,11 @@ namespace Stateless.Tests
         }
 
         [Fact]
-        public void TriggerParametersAreImmutableOnceSet()
+        public void TriggerParametersWithSimilarArgumentsAreImmutableOnceSet()
         {
             var sm = new StateMachine<State, Trigger>(State.B);
             sm.SetTriggerParameters<string, int>(Trigger.X);
-            Assert.Throws<InvalidOperationException>(() => sm.SetTriggerParameters<string>(Trigger.X));
+            Assert.Throws<InvalidOperationException>(() => sm.SetTriggerParameters<string, int>(Trigger.X));
         }
 
         [Fact]
